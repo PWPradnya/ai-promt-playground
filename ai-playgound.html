@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Prompt Playground</title>
+  
+  <!-- Angular Core -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/angular.js/1.8.3/angular.min.js"></script>
+  <!-- my style-->
+  <link rel="stylesheet" href="style.css">
+  
+  <!-- Material Icons -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+</head>
+<body ng-app="aiPromptApp" ng-controller="AppController" ng-class="theme">
+  <div class="container">
+    <header class="header">
+      <h1 class="app-title">
+        <span class="material-icons">psychology</span>
+        AI Prompt Playground
+      </h1>
+      <button 
+        class="theme-toggle" 
+        ng-click="toggleTheme()" 
+        aria-label="Toggle dark mode"
+        title="Toggle dark mode">
+        <span class="material-icons" ng-show="theme === 'light-mode'">dark_mode</span>
+        <span class="material-icons" ng-show="theme === 'dark-mode'">light_mode</span>
+      </button>
+    </header>
+
+    <div class="model-selector">
+      <label for="model-select" class="model-selector-label">AI Model</label>
+      <div class="select-wrapper">
+        <select 
+          id="model-select" 
+          ng-model="selectedModel" 
+          ng-options="model.name for model in models" 
+          ng-disabled="loading"
+          aria-describedby="model-error">
+          <option value="">Select a model</option>
+        </select>
+        <span class="material-icons select-icon">expand_more</span>
+      </div>
+      <div ng-show="loading" class="loading-spinner" aria-label="Loading models"></div>
+      <div id="model-error" class="error-message" ng-show="loadError">{{ loadError }}</div>
+    </div>
+
+    <div class="grid">
+      <div class="card prompt-editor">
+        <h2 class="card-title">Prompt Editor</h2>
+        <textarea 
+          ng-model="currentPrompt" 
+          placeholder="Enter your prompt here..." 
+          aria-label="Prompt editor">
+        </textarea>
+        <div class="button-group">
+          <button class="btn btn-primary" ng-click="saveTemplate()" aria-label="Save template">
+            <span class="material-icons">save</span> Save
+          </button>
+          <button class="btn btn-outline" ng-click="loadTemplate()" aria-label="Load template">
+            <span class="material-icons">folder_open</span> Load
+          </button>
+          <button class="btn btn-outline" ng-click="copyPrompt()" aria-label="Copy to clipboard">
+            <span class="material-icons">content_copy</span> Copy
+          </button>
+          <button class="btn btn-outline" ng-click="downloadSession()" aria-label="Download session">
+            <span class="material-icons">download</span> Download JSON
+          </button>
+        </div>
+      </div>
+
+      <div class="card parameters-panel">
+        <h2 class="card-title">Parameters</h2>
+        <div class="parameter-group">
+          <div class="parameter-label">
+            <span>Temperature</span>
+            <span class="parameter-value">{{ temperature.toFixed(2) }}</span>
+          </div>
+          <div class="slider-container">
+            <input 
+              type="range" 
+              class="slider" 
+              min="0" 
+              max="1" 
+              step="0.01" 
+              ng-model="temperature" 
+              aria-label="Temperature parameter"
+              aria-valuemin="0"
+              aria-valuemax="1"
+              aria-valuenow="{{ temperature }}">
+          </div>
+          <small>Controls randomness: Lower values are more deterministic, higher values are more creative</small>
+        </div>
+
+        <div class="parameter-group">
+          <div class="parameter-label">
+            <span>Max Tokens</span>
+            <span class="parameter-value">{{ maxTokens }}</span>
+          </div>
+          <div class="slider-container">
+            <input 
+              type="range" 
+              class="slider" 
+              min="1" 
+              ng-model="maxTokens" 
+              ng-max="selectedModel ? selectedModel.maxTokens : 2048" 
+              aria-label="Max tokens parameter"
+              aria-valuemin="1"
+              aria-valuemax="{{ selectedModel ? selectedModel.maxTokens : 2048 }}"
+              aria-valuenow="{{ maxTokens }}">
+          </div>
+          <small>Maximum number of tokens to generate, capped by model limit ({{ selectedModel ? selectedModel.maxTokens : '-' }})</small>
+        </div>
+      </div>
+    </div>
+
+    <div class="chat-area">
+      <div class="chat-header">
+        Output Preview
+      </div>
+      <div class="chat-messages" id="chat-messages" aria-live="polite">
+        <div ng-if="messages.length === 0" class="empty-state">
+          <span class="material-icons empty-state-icon">chat</span>
+          <p>Submit a prompt to see responses here</p>
+        </div>
+        <div ng-repeat="message in messages" class="message" ng-class="{'user-message': message.role === 'user', 'assistant-message': message.role === 'assistant'}">
+          <div class="message-role">{{ message.role === 'user' ? 'You' : 'Assistant' }}</div>
+          <div class="message-content">{{ message.content }}</div>
+        </div>
+      </div>
+      <div class="chat-input">
+        <input 
+          type="text" 
+          class="chat-input-field" 
+          ng-model="inputMessage" 
+          placeholder="Send a message"
+          ng-keyup="$event.keyCode === 13 && submitPrompt()"
+          aria-label="Chat input">
+        <button 
+          class="btn btn-primary" 
+          ng-click="submitPrompt()" 
+          aria-label="Submit prompt">
+          <span class="material-icons">send</span>
+          <span class="visuallyhidden">Send</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script id="app-script">
+    angular.module('aiPromptApp', [])
+      .controller('AppController', function($scope, $http, $timeout) {
+        // Initialize theme from localStorage or default to light
+        $scope.theme = localStorage.getItem('theme') || 'light-mode';
+        document.body.classList.add($scope.theme);
+        
+        // Model loading state
+        $scope.loading = true;
+        $scope.loadError = null;
+        $scope.models = [];
+        $scope.selectedModel = null;
+        
+        // Parameters
+        $scope.temperature = 0.7;
+        $scope.maxTokens = 512;
+        
+        // Prompt handling
+        $scope.currentPrompt = '';
+        $scope.savedTemplates = [];
+        
+        // Chat
+        $scope.messages = [];
+        $scope.inputMessage = '';
+        
+        // Mock loading models from JSON file
+        $timeout(function() {
+          $scope.models = [
+            { id: 'gpt-3.5', name: 'GPT-3.5', maxTokens: 4096 },
+            { id: 'gpt-4', name: 'GPT-4', maxTokens: 8192 },
+            { id: 'claude-2', name: 'Claude 2', maxTokens: 100000 },
+            { id: 'llama-2', name: 'Llama 2', maxTokens: 4096 }
+          ];
+          $scope.loading = false;
+        }, 1000);
+        
+        // Toggle theme function
+        $scope.toggleTheme = function() {
+          $scope.theme = $scope.theme === 'light-mode' ? 'dark-mode' : 'light-mode';
+          localStorage.setItem('theme', $scope.theme);
+        };
+        
+        // Save template in memory
+        $scope.saveTemplate = function() {
+          if (!$scope.currentPrompt.trim()) return;
+          
+          $scope.savedTemplates.push({
+            id: Date.now(),
+            content: $scope.currentPrompt,
+            timestamp: new Date()
+          });
+          
+          // Show notification (could be improved with a proper notification system)
+          alert('Template saved successfully!');
+        };
+        
+        // Load template
+        $scope.loadTemplate = function() {
+          if ($scope.savedTemplates.length === 0) {
+            alert('No saved templates found');
+            return;
+          }
+          
+          // In a real app, we'd show a nice modal dialog here
+          // For now, just load the last saved template
+          $scope.currentPrompt = $scope.savedTemplates[$scope.savedTemplates.length - 1].content;
+        };
+        
+        // Copy prompt to clipboard
+        $scope.copyPrompt = function() {
+          if (!$scope.currentPrompt.trim()) return;
+          
+          // Using older API for wider compatibility
+          const textArea = document.createElement('textarea');
+          textArea.value = $scope.currentPrompt;
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+          
+          alert('Copied to clipboard!');
+        };
+        
+        // Download session as JSON
+        $scope.downloadSession = function() {
+          const sessionData = {
+            model: $scope.selectedModel ? $scope.selectedModel.id : null,
+            prompt: $scope.currentPrompt,
+            parameters: {
+              temperature: $scope.temperature,
+              maxTokens: $scope.maxTokens
+            },
+            messages: $scope.messages,
+            timestamp: new Date()
+          };
+          
+          const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(sessionData, null, 2));
+          const downloadAnchorNode = document.createElement('a');
+          downloadAnchorNode.setAttribute("href", dataStr);
+          downloadAnchorNode.setAttribute("download", "ai-prompt-session.json");
+          document.body.appendChild(downloadAnchorNode);
+          downloadAnchorNode.click();
+          downloadAnchorNode.remove();
+        };
+        
+        // Submit prompt function
+        $scope.submitPrompt = function() {
+          let messageToSend = $scope.inputMessage.trim();
+          
+          // If there's content in the prompt editor and no input message, use that
+          if (!messageToSend && $scope.currentPrompt.trim()) {
+            messageToSend = $scope.currentPrompt.trim();
+          }
+          
+          if (!messageToSend) return;
+          
+          // Add user message
+          $scope.messages.push({
+            role: 'user',
+            content: messageToSend
+          });
+          
+          // Clear inputs
+          $scope.inputMessage = '';
+          
+          // Simulate AI response after a delay
+          $timeout(function() {
+            $scope.messages.push({
+              role: 'assistant',
+              content: `[This is a simulated response] I've received your prompt: "${messageToSend.substring(0, 50)}${messageToSend.length > 50 ? '...' : ''}" with temperature ${$scope.temperature.toFixed(2)} and max tokens ${$scope.maxTokens}.`
+            });
+            
+            // Scroll chat to bottom
+            const chatContainer = document.getElementById('chat-messages');
+            if (chatContainer) {
+              $timeout(function() {
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+              }, 0);
+            }
+          }, 1000);
+        };
+      });
+  </script>
+</body>
+</html>
